@@ -1,0 +1,164 @@
+{
+	"name": "aggregate batchSize test",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "6c90bf81-0c0e-4c5f-9f0c-297f06d9668a",
+			"name": "When clicking \"Execute Workflow\"",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [-440, 260]
+		},
+		{
+			"parameters": {
+				"data": [
+					{ "id": 1, "char": "a" },
+					{ "id": 2, "char": "b" },
+					{ "id": 3, "char": "c" },
+					{ "id": 4, "char": "d" },
+					{ "id": 5, "char": "e" }
+				]
+			},
+			"id": "2e0011d5-c6a0-4a40-ab8c-9d011cde40d5",
+			"name": "Code",
+			"type": "n8n-nodes-testing.testData",
+			"typeVersion": 1,
+			"position": [-180, 260]
+		},
+		{
+			"parameters": {
+				"aggregate": "aggregateAllItemData",
+				"options": {
+					"batchSize": 3
+				}
+			},
+			"id": "aaa00001-0001-0001-0001-aaa000000001",
+			"name": "aggregate all with batchSize 3",
+			"type": "n8n-nodes-base.aggregate",
+			"typeVersion": 1,
+			"position": [80, 0]
+		},
+		{
+			"parameters": {
+				"fieldsToAggregate": {
+					"fieldToAggregate": [
+						{
+							"fieldToAggregate": "id",
+							"renameField": true,
+							"outputFieldName": "data"
+						}
+					]
+				},
+				"options": {
+					"batchSize": 3
+				}
+			},
+			"id": "aaa00002-0002-0002-0002-aaa000000002",
+			"name": "aggregate individual fields with batchSize 3",
+			"type": "n8n-nodes-base.aggregate",
+			"typeVersion": 1,
+			"position": [80, 300]
+		},
+		{
+			"parameters": {
+				"aggregate": "aggregateAllItemData",
+				"options": {
+					"batchSize": 0
+				}
+			},
+			"id": "aaa00003-0003-0003-0003-aaa000000003",
+			"name": "aggregate all batchSize 0 preserves single item",
+			"type": "n8n-nodes-base.aggregate",
+			"typeVersion": 1,
+			"position": [80, 600]
+		}
+	],
+	"pinData": {
+		"aggregate all with batchSize 3": [
+			{
+				"json": {
+					"data": [
+						{ "id": 1, "char": "a" },
+						{ "id": 2, "char": "b" },
+						{ "id": 3, "char": "c" }
+					]
+				}
+			},
+			{
+				"json": {
+					"data": [
+						{ "id": 4, "char": "d" },
+						{ "id": 5, "char": "e" }
+					]
+				}
+			}
+		],
+		"aggregate individual fields with batchSize 3": [
+			{
+				"json": {
+					"data": [1, 2, 3]
+				}
+			},
+			{
+				"json": {
+					"data": [4, 5]
+				}
+			}
+		],
+		"aggregate all batchSize 0 preserves single item": [
+			{
+				"json": {
+					"data": [
+						{ "id": 1, "char": "a" },
+						{ "id": 2, "char": "b" },
+						{ "id": 3, "char": "c" },
+						{ "id": 4, "char": "d" },
+						{ "id": 5, "char": "e" }
+					]
+				}
+			}
+		]
+	},
+	"connections": {
+		"When clicking \"Execute Workflow\"": {
+			"main": [
+				[
+					{
+						"node": "Code",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Code": {
+			"main": [
+				[
+					{
+						"node": "aggregate all with batchSize 3",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "aggregate individual fields with batchSize 3",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "aggregate all batchSize 0 preserves single item",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"active": false,
+	"settings": {},
+	"versionId": "batchsize-test-001",
+	"id": "200",
+	"meta": {
+		"instanceId": "batchsize-test"
+	},
+	"tags": []
+}
