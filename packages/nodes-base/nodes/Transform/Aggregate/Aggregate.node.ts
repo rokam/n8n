@@ -458,7 +458,7 @@ export class Aggregate implements INodeType {
 						pairedItem: chunkPaired,
 					});
 				}
-				// Handle edge case: all items were filtered out
+				// Emit a single empty item when all items were filtered out (consistent with batchSize=0 behavior)
 				if (newItems.length === 0) {
 					returnItems.push({ json: { [destinationFieldName]: [] }, pairedItem: [] });
 				}
