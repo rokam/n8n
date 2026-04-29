@@ -270,8 +270,7 @@ export class Aggregate implements INodeType {
 
 		const aggregate = this.getNodeParameter('aggregate', 0, '') as string;
 
-		const rawBatchSize = this.getNodeParameter('options.batchSize', 0, 0) as number;
-		const batchSize = Math.floor(rawBatchSize);
+		const batchSize = Math.floor(this.getNodeParameter('options.batchSize', 0, 0) as number);
 
 		if (batchSize < 0) {
 			throw new NodeOperationError(this.getNode(), 'Batch Size must be 0 or greater', {
@@ -351,7 +350,6 @@ export class Aggregate implements INodeType {
 					if (fieldToAggregate !== '') {
 						values[_outputFieldName] = [];
 						for (let i = 0; i < batchItems.length; i++) {
-							// Track missing fields across all items (not per batch)
 							if (notFoundedFields[fieldToAggregate] === undefined) {
 								notFoundedFields[fieldToAggregate] = [];
 							}
