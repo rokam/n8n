@@ -265,20 +265,15 @@ export class Aggregate implements INodeType {
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		let returnData: INodeExecutionData = { json: {}, pairedItem: [] };
 		const items = this.getInputData();
 		const notFoundedFields: { [key: string]: boolean[] } = {};
 
 		const aggregate = this.getNodeParameter('aggregate', 0, '') as string;
-
 		const batchSize = Math.floor(this.getNodeParameter('options.batchSize', 0, 0) as number);
 
-		if (batchSize < 0) {
-			throw new NodeOperationError(this.getNode(), 'Batch Size must be 0 or greater', {
-				description: 'Please enter a non-negative value for Batch Size',
-			});
-		}
-
-		const returnItems: INodeExecutionData[] = [];
+		// Used to carry multiple items when aggregateIndividualFields + batchSize > 0
+		let batchedItems: INodeExecutionData[] | undefined;
 
 		if (aggregate === 'aggregateIndividualFields') {
 			const disableDotNotation = this.getNodeParameter(
@@ -300,44 +295,132 @@ export class Aggregate implements INodeType {
 				});
 			}
 
-			// Validate output field uniqueness once (applies to all batches)
-			const outputFields: string[] = [];
-			for (const { fieldToAggregate, outputFieldName, renameField } of fieldsToAggregate) {
-				const field = renameField ? outputFieldName : fieldToAggregate;
-				if (outputFields.includes(field)) {
-					throw new NodeOperationError(
-						this.getNode(),
-						`The '${field}' output field is used more than once`,
-						{ description: 'Please make sure each output field name is unique' },
-					);
-				} else {
-					outputFields.push(field);
+			if (batchSize > 0) {
+				// Per-batch processing: chunking on the item-index dimension.
+				// Post-processing split is unreliable here because keepMissing=false
+				// can produce values arrays shorter than items.length, losing the
+				// item-index ↔ value mapping needed for correct pairedItem assignment.
+				const outputFields: string[] = [];
+				for (const { fieldToAggregate, outputFieldName, renameField } of fieldsToAggregate) {
+					const field = renameField ? outputFieldName : fieldToAggregate;
+					if (outputFields.includes(field)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							`The '${field}' output field is used more than once`,
+							{ description: 'Please make sure each output field name is unique' },
+						);
+					} else {
+						outputFields.push(field);
+					}
 				}
-			}
 
-			// Determine batch boundaries on the item-index dimension
-			const batchBoundaries: Array<{ start: number; end: number }> =
-				batchSize > 0 && items.length > 0
-					? Array.from(
-							{ length: Math.ceil(items.length / batchSize) },
-							(_, k) => ({
-								start: k * batchSize,
-								end: Math.min((k + 1) * batchSize, items.length),
-							}),
-						)
-					: [{ start: 0, end: items.length }];
+				batchedItems = [];
+				const batchCount = items.length > 0 ? Math.ceil(items.length / batchSize) : 1;
+				for (let k = 0; k < batchCount; k++) {
+					const start = k * batchSize;
+					const end = Math.min(start + batchSize, items.length);
+					const batchSlice = items.slice(start, end);
 
-			for (const { start, end } of batchBoundaries) {
-				const batchItems = items.slice(start, end);
+					const newItem: INodeExecutionData = {
+						json: {},
+						pairedItem: Array.from({ length: end - start }, (_, i) => ({ item: start + i })),
+					};
 
+					const values: { [key: string]: any } = {};
+
+					for (const { fieldToAggregate, outputFieldName } of fieldsToAggregate) {
+						const getFieldToAggregate = () =>
+							!disableDotNotation && fieldToAggregate.includes('.')
+								? fieldToAggregate.split('.').pop()
+								: fieldToAggregate;
+
+						const _outputFieldName = outputFieldName
+							? outputFieldName
+							: (getFieldToAggregate() as string);
+
+						if (fieldToAggregate !== '') {
+							values[_outputFieldName] = [];
+							for (let i = 0; i < batchSlice.length; i++) {
+								if (notFoundedFields[fieldToAggregate] === undefined) {
+									notFoundedFields[fieldToAggregate] = [];
+								}
+
+								if (!disableDotNotation) {
+									let value = get(batchSlice[i].json, fieldToAggregate);
+									notFoundedFields[fieldToAggregate].push(value === undefined ? false : true);
+
+									if (!keepMissing) {
+										if (Array.isArray(value)) {
+											value = value.filter((entry) => entry !== null);
+										} else if (value === null || value === undefined) {
+											continue;
+										}
+									}
+
+									if (Array.isArray(value) && mergeLists) {
+										values[_outputFieldName].push(...value);
+									} else {
+										values[_outputFieldName].push(value);
+									}
+								} else {
+									let value = batchSlice[i].json[fieldToAggregate];
+									notFoundedFields[fieldToAggregate].push(value === undefined ? false : true);
+
+									if (!keepMissing) {
+										if (Array.isArray(value)) {
+											value = value.filter((entry) => entry !== null);
+										} else if (value === null || value === undefined) {
+											continue;
+										}
+									}
+
+									if (Array.isArray(value) && mergeLists) {
+										values[_outputFieldName].push(...value);
+									} else {
+										values[_outputFieldName].push(value);
+									}
+								}
+							}
+						}
+					}
+
+					for (const key of Object.keys(values)) {
+						if (!disableDotNotation) {
+							set(newItem.json, key, values[key]);
+						} else {
+							newItem.json[key] = values[key];
+						}
+					}
+
+					batchedItems.push(newItem);
+				}
+			} else {
+				// Original single-item logic (unchanged)
 				const newItem: INodeExecutionData = {
 					json: {},
-					pairedItem: Array.from({ length: end - start }, (_, i) => ({ item: start + i })),
+					pairedItem: Array.from({ length: items.length }, (_, i) => i).map((index) => {
+						return {
+							item: index,
+						};
+					}),
 				};
 
-				const values: { [key: string]: unknown[] } = {};
+				const values: { [key: string]: any } = {};
+				const outputFields: string[] = [];
 
-				for (const { fieldToAggregate, outputFieldName } of fieldsToAggregate) {
+				for (const { fieldToAggregate, outputFieldName, renameField } of fieldsToAggregate) {
+					const field = renameField ? outputFieldName : fieldToAggregate;
+
+					if (outputFields.includes(field)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							`The '${field}' output field is used more than once`,
+							{ description: 'Please make sure each output field name is unique' },
+						);
+					} else {
+						outputFields.push(field);
+					}
+
 					const getFieldToAggregate = () =>
 						!disableDotNotation && fieldToAggregate.includes('.')
 							? fieldToAggregate.split('.').pop()
@@ -349,13 +432,13 @@ export class Aggregate implements INodeType {
 
 					if (fieldToAggregate !== '') {
 						values[_outputFieldName] = [];
-						for (let i = 0; i < batchItems.length; i++) {
+						for (let i = 0; i < items.length; i++) {
 							if (notFoundedFields[fieldToAggregate] === undefined) {
 								notFoundedFields[fieldToAggregate] = [];
 							}
 
 							if (!disableDotNotation) {
-								let value = get(batchItems[i].json, fieldToAggregate);
+								let value = get(items[i].json, fieldToAggregate);
 								notFoundedFields[fieldToAggregate].push(value === undefined ? false : true);
 
 								if (!keepMissing) {
@@ -372,7 +455,7 @@ export class Aggregate implements INodeType {
 									values[_outputFieldName].push(value);
 								}
 							} else {
-								let value = batchItems[i].json[fieldToAggregate];
+								let value = items[i].json[fieldToAggregate];
 								notFoundedFields[fieldToAggregate].push(value === undefined ? false : true);
 
 								if (!keepMissing) {
@@ -401,9 +484,10 @@ export class Aggregate implements INodeType {
 					}
 				}
 
-				returnItems.push(newItem);
+				returnData = newItem;
 			}
 		} else {
+			// Original aggregateAllItemData logic (unchanged)
 			let newItems: IDataObject[] = items.map((item) => item.json);
 			let pairedItem: IPairedItemData[] = [];
 			const destinationFieldName = this.getNodeParameter('destinationFieldName', 0) as string;
@@ -449,34 +533,22 @@ export class Aggregate implements INodeType {
 				}));
 			}
 
-			if (batchSize > 0) {
-				for (let start = 0; start < newItems.length; start += batchSize) {
-					const chunkItems = newItems.slice(start, start + batchSize);
-					const chunkPaired = pairedItem.slice(start, start + batchSize);
-					returnItems.push({
-						json: { [destinationFieldName]: chunkItems },
-						pairedItem: chunkPaired,
-					});
-				}
-				// Emit a single empty item when all items were filtered out (consistent with batchSize=0 behavior)
-				if (newItems.length === 0) {
-					returnItems.push({ json: { [destinationFieldName]: [] }, pairedItem: [] });
-				}
-			} else {
-				returnItems.push({ json: { [destinationFieldName]: newItems }, pairedItem });
-			}
+			const output: INodeExecutionData = { json: { [destinationFieldName]: newItems }, pairedItem };
+
+			returnData = output;
 		}
 
 		const includeBinaries = this.getNodeParameter('options.includeBinaries', 0, false) as boolean;
+		const keepOnlyUnique = this.getNodeParameter('options.keepOnlyUnique', 0, false) as boolean;
 
-		if (includeBinaries) {
-			const keepOnlyUnique = this.getNodeParameter('options.keepOnlyUnique', 0, false) as boolean;
+		if (includeBinaries && batchedItems === undefined) {
+			const pairedItems = (returnData.pairedItem || []) as IPairedItemData[];
 
-			for (const returnItem of returnItems) {
-				const pairedItems = (returnItem.pairedItem || []) as IPairedItemData[];
-				const aggregatedItems = pairedItems.map((p) => items[p.item]);
-				addBinariesToItem(returnItem, aggregatedItems, keepOnlyUnique);
-			}
+			const aggregatedItems = pairedItems.map((item) => {
+				return items[item.item];
+			});
+
+			addBinariesToItem(returnData, aggregatedItems, keepOnlyUnique);
 		}
 
 		if (Object.keys(notFoundedFields).length) {
@@ -494,6 +566,51 @@ export class Aggregate implements INodeType {
 			if (hints.length) {
 				this.addExecutionHints(...hints);
 			}
+		}
+
+		// aggregateIndividualFields + batchSize > 0: already built per-batch
+		if (batchedItems !== undefined) {
+			if (includeBinaries) {
+				for (const batchItem of batchedItems) {
+					const pairedItems = (batchItem.pairedItem || []) as IPairedItemData[];
+					addBinariesToItem(
+						batchItem,
+						pairedItems.map((p) => items[p.item]),
+						keepOnlyUnique,
+					);
+				}
+			}
+			return [batchedItems];
+		}
+
+		// batchSize = 0: original single-item return
+		if (batchSize <= 0) {
+			return [[returnData]];
+		}
+
+		// aggregateAllItemData + batchSize > 0: split returnData into chunks
+		const destinationFieldName = this.getNodeParameter('destinationFieldName', 0) as string;
+		const allItems = returnData.json[destinationFieldName] as IDataObject[];
+		const allPaired = (returnData.pairedItem || []) as IPairedItemData[];
+
+		const returnItems: INodeExecutionData[] = [];
+		const chunkCount = allItems.length > 0 ? Math.ceil(allItems.length / batchSize) : 1;
+		for (let k = 0; k < chunkCount; k++) {
+			const start = k * batchSize;
+			const chunkData = allItems.slice(start, start + batchSize);
+			const chunkPaired = allPaired.slice(start, start + batchSize);
+			const chunkItem: INodeExecutionData = {
+				json: { [destinationFieldName]: chunkData },
+				pairedItem: chunkPaired,
+			};
+			if (includeBinaries) {
+				addBinariesToItem(
+					chunkItem,
+					chunkPaired.map((p) => items[p.item]),
+					keepOnlyUnique,
+				);
+			}
+			returnItems.push(chunkItem);
 		}
 
 		return [returnItems];
